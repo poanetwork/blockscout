@@ -60,7 +60,8 @@ defmodule Indexer.Block.Fetcher do
                 token_transfers: Import.Runner.options(),
                 tokens: Import.Runner.options(),
                 transactions: Import.Runner.options()
-              }
+              },
+              boolean()
             ) :: Import.all_result()
 
   # These are all the *default* values for options.
@@ -114,9 +115,95 @@ defmodule Indexer.Block.Fetcher do
           callback_module: callback_module,
           json_rpc_named_arguments: json_rpc_named_arguments
         } = state,
-        _.._ = range
+        first..last = range
       )
       when callback_module != nil do
+    variant = Keyword.get(json_rpc_named_arguments, :variant)
+
+    {all_data_range, some_data_range} =
+      if variant == EthereumJSONRPC.Geth && Application.get_env(:indexer, :limit_geth) do
+        {_, max_block_number} = Chain.fetch_min_and_max_block_numbers()
+
+        cond do
+          max_block_number - last < @geth_block_limit ->
+            {range, nil}
+
+          max_block_number - first > @geth_block_limit ->
+            {nil, range}
+
+          true ->
+            {first..(first + @geth_block_limit), (first + @geth_block_limit + 1)..last}
+        end
+      else
+        {range, nil}
+      end
+
+    some_data_range_result = do_fetch_and_import_range(state, some_data_range, false)
+
+    all_data_range_result = do_fetch_and_import_range(state, all_data_range, true)
+
+    with {:ok, some_data_range_result} <- some_data_range_result,
+         {:ok, all_data_range_result} <- all_data_range_result do
+      merged_result = merge_results(some_data_range_result, all_data_range_result)
+
+      {:ok, merged_result}
+    else
+      error -> error
+    end
+  end
+
+  defp merge_results(result1, result2) do
+    cond do
+      result1 == %{} ->
+        result2
+
+      result2 == %{} ->
+        result1
+
+      true ->
+        inserted =
+          Map.merge(result1[:inserted], result2[:inserted], fn _k, v1, v2 ->
+            v1 ++ v2
+          end)
+
+        errors = Map.get(result1, :errors, []) ++ Map.get(result2, :errors, [])
+
+        %{inserted: inserted, errors: errors}
+    end
+  end
+
+  defp do_fetch_and_import_range(_, nil, _), do: {:ok, %{}}
+
+  defp do_fetch_and_import_range(
+         %__MODULE__{
+           broadcast: _broadcast
+         } = state,
+         range,
+         fetch_all_data
+       ) do
+    with {:ok, {data, blocks_errors}} <- extract_data(state, range),
+         {:ok, inserted} <-
+           __MODULE__.import(
+             state,
+             data,
+             fetch_all_data
+           ) do
+      {:ok, %{inserted: inserted, errors: blocks_errors}}
+    else
+      {step, {:error, reason}} -> {:error, {step, reason}}
+      {:import, {:error, step, failed_value, changes_so_far}} -> {:error, {step, failed_value, changes_so_far}}
+    end
+  end
+
+  defp extract_data(
+         %__MODULE__{
+           broadcast: _broadcast,
+           callback_module: callback_module,
+           json_rpc_named_arguments: json_rpc_named_arguments
+         } = state,
+         _.._ = range
+       )
+       when callback_module != nil do
     with {:blocks,
           {:ok,
            %Blocks{
@@ -154,33 +241,28 @@ defmodule Indexer.Block.Fetcher do
            beneficiary_params_set
            |> add_gas_payments(transactions_with_receipts)
            |> BlockReward.reduce_uncle_rewards(),
-         address_token_balances = AddressTokenBalances.params_set(%{token_transfers_params: token_transfers}),
-         {:ok, inserted} <-
-           __MODULE__.import(
-             state,
-             %{
-               addresses: %{params: addresses},
-               address_coin_balances: %{params: coin_balances_params_set},
-               address_token_balances: %{params: address_token_balances},
-               blocks: %{params: blocks},
-               block_second_degree_relations: %{params: block_second_degree_relations_params},
-               block_rewards: %{errors: beneficiaries_errors, params: beneficiaries_with_gas_payment},
-               logs: %{params: logs},
-               token_transfers: %{params: token_transfers},
-               tokens: %{on_conflict: :nothing, params: tokens},
-               transactions: %{params: transactions_with_receipts}
-             }
-           ) do
-      {:ok, %{inserted: inserted, errors: blocks_errors}}
-    else
-      {step, {:error, reason}} -> {:error, {step, reason}}
-      {:import, {:error, step, failed_value, changes_so_far}} -> {:error, {step, failed_value, changes_so_far}}
+         address_token_balances = AddressTokenBalances.params_set(%{token_transfers_params: token_transfers}) do
+      data = %{
+        addresses: %{params: addresses},
+        address_coin_balances: %{params: coin_balances_params_set},
+        address_token_balances: %{params: address_token_balances},
+        blocks: %{params: blocks},
+        block_second_degree_relations: %{params: block_second_degree_relations_params},
+        block_rewards: %{errors: beneficiaries_errors, params: beneficiaries_with_gas_payment},
+        logs: %{params: logs},
+        token_transfers: %{params: token_transfers},
+        tokens: %{on_conflict: :nothing, params: tokens},
+        transactions: %{params: transactions_with_receipts}
+      }
+
+      {:ok, {data, blocks_errors}}
     end
   end
 
   def import(
         %__MODULE__{broadcast: broadcast, callback_module: callback_module} = state,
-        options
+        options,
+        fetch_all_data \\ true
       )
       when is_map(options) do
     {address_hash_to_fetched_balance_block_number, import_options} =
@@ -195,7 +277,7 @@ defmodule Indexer.Block.Fetcher do
         }
       )
 
-    callback_module.import(state, options_with_broadcast)
+    callback_module.import(state, options_with_broadcast, fetch_all_data)
   end
 
   def async_import_block_rewards([]), do: :ok
@@ -249,8 +331,6 @@ defmodule Indexer.Block.Fetcher do
   end
 
   def async_import_internal_transactions(%{transactions: transactions}, EthereumJSONRPC.Geth) do
-    {_, max_block_number} = Chain.fetch_min_and_max_block_numbers()
-
     transactions
     |> Enum.flat_map(fn
       %Transaction{block_number: block_number, index: index, hash: hash, internal_transactions_indexed_at: nil} ->
@@ -258,9 +338,6 @@ defmodule Indexer.Block.Fetcher do
 
       %Transaction{internal_transactions_indexed_at: %DateTime{}} ->
         []
-    end)
-    |> Enum.filter(fn %{block_number: block_number} ->
-      max_block_number - block_number < @geth_block_limit
     end)
     |> InternalTransaction.async_fetch(10_000)
   end

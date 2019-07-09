@@ -1,0 +1,25 @@
+version: '2.4'
+services:
+  db:
+    container_name: postgres
+    image: postgres:10.6
+    env_file:
+      - .env
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+  web:
+    container_name: blockscout
+    working_dir: /blockscout
+    build:
+      context: .
+    env_file:
+      - .env
+    volumes:
+      - type: bind
+        source: .
+        target: /blockscout
+    ports:
+      - "4000:4000"
+    depends_on:
+      - db
+    command: ./run.sh

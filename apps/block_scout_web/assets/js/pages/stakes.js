@@ -1,1 +1,304 @@
 import '../../css/stakes.scss'
+
+import $ from 'jquery'
+import _ from 'lodash'
+import { subscribeChannel } from '../socket'
+import { connectElements } from '../lib/redux_helpers.js'
+import { createAsyncLoadStore, refreshPage } from '../lib/async_listing_load'
+import Web3 from 'web3'
+import { openValidatorInfoModal } from './stakes/validator_info'
+import { openDelegatorsListModal } from './stakes/delegators_list'
+import { openBecomeCandidateModal } from './stakes/become_candidate'
+import { openRemovePoolModal } from './stakes/remove_pool'
+import { openMakeStakeModal } from './stakes/make_stake'
+import { openMoveStakeModal } from './stakes/move_stake'
+import { openWithdrawStakeModal } from './stakes/withdraw_stake'
+import { openClaimWithdrawalModal } from './stakes/claim_withdrawal'
+import { openWarningModal } from '../lib/modals'
+import Web3Connect from "web3connect"
+import WalletConnectProvider from "@walletconnect/web3-provider";
+import Portis from "@portis/web3";
+
+export const initialState = {
+  channel: null,
+  web3: null,
+  account: null,
+  network: null,
+  stakingContract: null,
+  blockRewardContract: null,
+  tokenDecimals: 0,
+  tokenSymbol: '',
+  refreshInterval: null,
+  lastEpochNumber: 0,
+  lastBlockNumber: 0,
+  stakingAllowed: false
+}
+
+// 100 - id of xDai network, 101 - id of xDai test network
+export const allowedNetworkIds = [100, 101]
+
+export function reducer (state = initialState, action) {
+  switch (action.type) {
+    case 'PAGE_LOAD':
+    case 'ELEMENTS_LOAD': {
+      return Object.assign({}, state, _.omit(action, 'type'))
+    }
+    case 'CHANNEL_CONNECTED': {
+      return Object.assign({}, state, { channel: action.channel })
+    }
+    case 'WEB3_DETECTED': {
+      return Object.assign({}, state, { web3: action.web3 })
+    }
+    case 'ACCOUNT_UPDATED': {
+      return Object.assign({}, state, {
+        account: action.account,
+        additionalParams: Object.assign({}, state.additionalParams, {
+          account: action.account
+        })
+      })
+    }
+    case 'NETWORK_UPDATED': {
+      return Object.assign({}, state, {
+        network: action.network,
+        additionalParams: Object.assign({}, state.additionalParams, {
+          network: action.network
+        })
+      })
+    }
+    case 'FILTERS_UPDATED': {
+      return Object.assign({}, state, {
+        additionalParams: Object.assign({}, state.additionalParams, {
+          filterBanned: action.filterBanned,
+          filterMy: action.filterMy
+        })
+      })
+    }
+    case 'RECEIVED_UPDATE': {
+      return Object.assign({}, state, {
+        lastEpochNumber: action.lastEpochNumber,
+        lastBlockNumber: action.lastBlockNumber,
+        stakingAllowed: action.stakingAllowed
+      })
+    }
+    case 'RECEIVED_CONTRACTS': {
+      return Object.assign({}, state, {
+        stakingContract: action.stakingContract,
+        blockRewardContract: action.blockRewardContract,
+        tokenDecimals: action.tokenDecimals,
+        tokenSymbol: action.tokenSymbol
+      })
+    }
+    default:
+      return state
+  }
+}
+
+const web3Connect = new Web3Connect.Core({
+  //network: "mainnet", // optional
+  providerOptions: {
+    walletconnect: {
+      package: WalletConnectProvider, // required
+      options: {
+        infuraId: null,
+        chainId: 100,
+        rpc: {
+          100: "https://dai.poa.network",
+          101: "http://localhost:8541"
+        }
+        //infuraId: "a54b4b38e94743928c452dcdfcafc767" // required
+      }
+    },
+    portis: {
+      package: Portis, // required
+      options: {
+        id: "829ee48f-4a30-4a22-9740-fb92f4e14896", // required
+        //network: {nodeUrl: "https://dai.poa.network"}
+        network: {nodeUrl: "http://localhost:8541"}
+        //network: "sokol"
+      }
+    }
+  }
+});
+
+const elements = {
+  '[data-page="stakes"]': {
+    load ($el) {
+      return {
+        refreshInterval: $el.data('refresh-interval') || null,
+        additionalParams: {
+          filterBanned: $el.find('[pool-filter-banned]').prop('checked'),
+          filterMy: $el.find('[pool-filter-my]').prop('checked')
+        }
+      }
+    }
+  }
+}
+
+const $stakesPage = $('[data-page="stakes"]')
+const $stakesTop = $('[data-selector="stakes-top"]')
+if ($stakesPage.length) {
+  const store = createAsyncLoadStore(reducer, initialState, 'dataset.identifierPool')
+  connectElements({ store, elements })
+
+  const channel = subscribeChannel('stakes:staking_update')
+  store.dispatch({ type: 'CHANNEL_CONNECTED', channel })
+
+  channel.on('staking_update', msg => {
+    // hide tooltip on tooltip triggering element reloading
+    // due to issues with bootstrap tooltips https://github.com/twbs/bootstrap/issues/13133
+    const stakesTopTooltipID = $('[aria-describedby]', $stakesTop).attr('aria-describedby')
+    $('#' + stakesTopTooltipID).hide()
+
+    $stakesTop.html(msg.top_html)
+
+    const state = store.getState()
+    if (
+      msg.staking_allowed !== state.stakingAllowed ||
+      msg.epoch_number > state.lastEpochNumber ||
+      (state.refreshInterval && msg.block_number >= state.lastBlockNumber + state.refreshInterval)
+    ) {
+      store.dispatch({
+        type: 'RECEIVED_UPDATE',
+        lastEpochNumber: msg.epoch_number,
+        lastBlockNumber: msg.block_number,
+        stakingAllowed: msg.staking_allowed
+      })
+      refreshPage(store)
+    }
+  })
+
+  channel.on('contracts', msg => {
+    const web3 = store.getState().web3
+    const stakingContract =
+      new web3.eth.Contract(msg.staking_contract.abi, msg.staking_contract.address)
+    const blockRewardContract =
+      new web3.eth.Contract(msg.block_reward_contract.abi, msg.block_reward_contract.address)
+
+    store.dispatch({
+      type: 'RECEIVED_CONTRACTS',
+      stakingContract,
+      blockRewardContract,
+      tokenDecimals: parseInt(msg.token_decimals),
+      tokenSymbol: msg.token_symbol
+    })
+  })
+
+  $(document.body)
+    .on('click', '.js-validator-info', event => openValidatorInfoModal(event, store))
+    .on('click', '.js-delegators-list', event => openDelegatorsListModal(event, store))
+    .on('click', '.js-become-candidate', () => openBecomeCandidateModal(store))
+    .on('click', '.js-remove-pool', () => openRemovePoolModal(store))
+    .on('click', '.js-make-stake', event => openMakeStakeModal(event, store))
+    .on('click', '.js-move-stake', event => openMoveStakeModal(event, store))
+    .on('click', '.js-withdraw-stake', event => openWithdrawStakeModal(event, store))
+    .on('click', '.js-claim-withdrawal', event => openClaimWithdrawalModal(event, store))
+
+  $stakesPage
+    .on('change', '[pool-filter-banned]', () => updateFilters(store))
+    .on('change', '[pool-filter-my]', () => updateFilters(store))
+
+  initializeWeb3(store)
+}
+
+function updateFilters (store) {
+  store.dispatch({
+    type: 'FILTERS_UPDATED',
+    filterBanned: $stakesPage.find('[pool-filter-banned]').prop('checked'),
+    filterMy: $stakesPage.find('[pool-filter-my]').prop('checked')
+  })
+  refreshPage(store)
+}
+
+function initializeWeb3 (store) {
+  // subscribe to connect
+  $stakesTop.on('click', '[data-selector="login-button"]', loginByWeb3Connect)
+
+  // subscribe to close
+  web3Connect.on("close", () => {
+    console.log("Web3Connect Modal Closed"); // modal has closed
+  });
+
+  web3Connect.on("connect", (provider) => {
+    const web3 = new Web3(provider); // add provider to web3
+    store.dispatch({ type: 'WEB3_DETECTED', web3 })
+
+    setInterval(async function () {
+      const networkId = await web3.eth.net.getId()
+      if (!store.getState().network || (networkId !== store.getState().network.id)) {
+        setNetwork(networkId, store)
+      }
+
+      const accounts = await web3.eth.getAccounts()
+      const account = accounts[0] ? accounts[0].toLowerCase() : null
+
+      if (account !== store.getState().account) {
+        setAccount(account, store)
+      }
+    }, 100)
+  });
+
+  // if (window.ethereum) {
+  //   console.log('window.ethereum')
+  //   const web3 = new Web3(window.ethereum)
+  //   console.log(web3)
+  //   store.dispatch({ type: 'WEB3_DETECTED', web3 })
+
+  //   setInterval(async function () {
+  //     const networkId = await web3.eth.net.getId()
+  //     if (!store.getState().network || (networkId !== store.getState().network.id)) {
+  //       setNetwork(networkId, store)
+  //     }
+
+  //     const accounts = await web3.eth.getAccounts()
+  //     const account = accounts[0] ? accounts[0].toLowerCase() : null
+
+  //     if (account !== store.getState().account) {
+  //       setAccount(account, store)
+  //     }
+  //   }, 100)
+
+  //   // $stakesTop.on('click', '[data-selector="login-button"]', loginByMetamask)
+  // }
+}
+
+function setAccount (account, store) {
+  store.dispatch({ type: 'ACCOUNT_UPDATED', account })
+  store.getState().channel.push('set_account', account)
+  console.log('setAccount')
+  refreshPage(store)
+}
+
+function setNetwork (networkId, store) {
+  let network = {
+    id: networkId,
+    authorized: false
+  }
+
+  if (allowedNetworkIds.includes(networkId)) {
+    network.authorized = true
+  } else {
+    openWarningModal('Unauthorized', 'Connect to the xDai Chain for staking.<br /> <a href="https://docs.xdaichain.com" target="_blank">Instructions</a>')
+  }
+
+  store.dispatch({ type: 'NETWORK_UPDATED', network })
+  refreshPage(store)
+}
+
+async function loginByMetamask (event) {
+  event.stopPropagation()
+  event.preventDefault()
+
+  try {
+    await window.ethereum.enable()
+  } catch (e) {
+    console.log(e)
+    console.error('User denied account access')
+  }
+}
+
+async function loginByWeb3Connect (event) {
+  event.stopPropagation()
+  event.preventDefault()
+
+  web3Connect.toggleModal();
+}

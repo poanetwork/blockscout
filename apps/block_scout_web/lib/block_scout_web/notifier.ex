@@ -7,10 +7,12 @@ defmodule BlockScoutWeb.Notifier do
   alias BlockScoutWeb.{AddressContractVerificationView, Endpoint}
   alias Explorer.{Chain, Market, Repo}
   alias Explorer.Chain.{Address, InternalTransaction, Transaction}
+  alias Explorer.Chain.Cache.BlockNumber
   alias Explorer.Chain.Supply.RSK
   alias Explorer.Counters.AverageBlockTime
   alias Explorer.ExchangeRates.Token
   alias Explorer.SmartContract.{Solidity.CodeCompiler, Solidity.CompilerVersion}
+  alias Explorer.Staking.ContractState
   alias Phoenix.View
 
   def handle_event({:chain_event, :addresses, type, addresses}) when type in [:realtime, :on_demand] do
@@ -89,6 +91,20 @@ defmodule BlockScoutWeb.Notifier do
     Endpoint.broadcast("exchange_rate:new_rate", "new_rate", %{
       exchange_rate: exchange_rate_with_available_supply,
       market_history_data: Enum.map(market_history_data, fn day -> Map.take(day, [:closing_price, :date]) end)
+    })
+  end
+
+  def handle_event({:chain_event, :staking_update}) do
+    epoch_number = ContractState.get(:epoch_number, 0)
+    epoch_end_block = ContractState.get(:epoch_end_block, 0)
+    staking_allowed = ContractState.get(:staking_allowed, false)
+    block_number = BlockNumber.get_max()
+
+    Endpoint.broadcast("stakes:staking_update", "staking_update", %{
+      epoch_number: epoch_number,
+      epoch_end_block: epoch_end_block,
+      staking_allowed: staking_allowed,
+      block_number: block_number
     })
   end
 

@@ -41,6 +41,8 @@ import { createStore, connectElements } from '../lib/redux_helpers.js'
 export const asyncInitialState = {
   /* it will consider any query param in the current URI as paging */
   beyondPageOne: (URI(window.location).query() !== ''),
+  /* will be sent along with { type: 'JSON' } to controller, useful for dynamically changing parameters */
+  additionalParams: {},
   /* an array with every html element of the list being shown */
   items: [],
   /* the key for diffing the elements in the items array */
@@ -51,6 +53,8 @@ export const asyncInitialState = {
   requestError: false,
   /* if response has no items */
   emptyResponse: false,
+  /* link to the current page */
+  currentPagePath: null,
   /* link to the next page */
   nextPagePath: null,
   /* link to the previous page */
@@ -62,7 +66,10 @@ export const asyncInitialState = {
 export function asyncReducer (state = asyncInitialState, action) {
   switch (action.type) {
     case 'ELEMENTS_LOAD': {
-      return Object.assign({}, state, { nextPagePath: action.nextPagePath })
+      return Object.assign({}, state, {
+        nextPagePath: action.nextPagePath,
+        currentPagePath: action.nextPagePath
+      })
     }
     case 'ADD_ITEM_KEY': {
       return Object.assign({}, state, { itemKey: action.itemKey })
@@ -70,7 +77,8 @@ export function asyncReducer (state = asyncInitialState, action) {
     case 'START_REQUEST': {
       return Object.assign({}, state, {
         loading: true,
-        requestError: false
+        requestError: false,
+        currentPagePath: action.path
       })
     }
     case 'REQUEST_ERROR': {
@@ -176,6 +184,7 @@ export const elements = {
         return $el.hide()
       }
 
+      $el.show()
       if (state.requestError || !state.nextPagePath || state.loading) {
         return $el.attr('disabled', 'disabled')
       }
@@ -190,6 +199,7 @@ export const elements = {
         return $el.hide()
       }
 
+      $el.show()
       if (state.requestError || !state.prevPagePath || state.loading) {
         return $el.attr('disabled', 'disabled')
       }
@@ -203,12 +213,13 @@ export const elements = {
       if (state.pagesStack.length === 0) {
         return $el.hide()
       }
-      $el.show()
-      $el.attr('disabled', false)
 
       const urlParams = new URLSearchParams(window.location.search)
       const blockParam = urlParams.get('block_type')
       const firstPageHref = window.location.href.split('?')[0]
+
+      $el.show()
+      $el.attr('disabled', false)
 
       if (blockParam !== null) {
         $el.attr('href', firstPageHref + '?block_type=' + blockParam)
@@ -223,6 +234,7 @@ export const elements = {
         return $el.hide()
       }
 
+      $el.show()
       if (state.pagesStack.length === 0) {
         return $el.text('Page 1')
       }
@@ -276,24 +288,26 @@ export function createAsyncLoadStore (reducer, initialState, itemKey) {
   return store
 }
 
+export function refreshPage (store) {
+  loadPage(store, store.getState().currentPagePath)
+}
+
+function loadPage (store, path) {
+  store.dispatch({type: 'START_REQUEST', path})
+  $.getJSON(path, merge({type: 'JSON'}, store.getState().additionalParams))
+    .done(response => store.dispatch(Object.assign({type: 'ITEMS_FETCHED'}, humps.camelizeKeys(response))))
+    .fail(() => store.dispatch({type: 'REQUEST_ERROR'}))
+    .always(() => store.dispatch({type: 'FINISH_REQUEST'}))
+}
+
 function firstPageLoad (store) {
   const $element = $('[data-async-listing]')
   function loadItemsNext () {
-    const path = store.getState().nextPagePath
-    store.dispatch({type: 'START_REQUEST'})
-    $.getJSON(path, {type: 'JSON'})
-      .done(response => store.dispatch(Object.assign({type: 'ITEMS_FETCHED'}, humps.camelizeKeys(response))))
-      .fail(() => store.dispatch({type: 'REQUEST_ERROR'}))
-      .always(() => store.dispatch({type: 'FINISH_REQUEST'}))
+    loadPage(store, store.getState().nextPagePath)
   }
 
   function loadItemsPrev () {
-    const path = store.getState().prevPagePath
-    store.dispatch({type: 'START_REQUEST'})
-    $.getJSON(path, {type: 'JSON'})
-      .done(response => store.dispatch(Object.assign({type: 'ITEMS_FETCHED'}, humps.camelizeKeys(response))))
-      .fail(() => store.dispatch({type: 'REQUEST_ERROR'}))
-      .always(() => store.dispatch({type: 'FINISH_REQUEST'}))
+    loadPage(store, store.getState().prevPagePath)
   }
   loadItemsNext()
 

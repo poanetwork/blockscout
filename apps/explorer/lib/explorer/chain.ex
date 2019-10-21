@@ -7,13 +7,14 @@ defmodule Explorer.Chain do
     only: [
       from: 2,
       join: 4,
+      join: 5,
       limit: 2,
       lock: 2,
       order_by: 2,
       order_by: 3,
-      offset: 2,
       preload: 2,
       select: 2,
+      select: 3,
       subquery: 1,
       union_all: 2,
       where: 2,
@@ -40,6 +41,7 @@ defmodule Explorer.Chain do
     Log,
     SmartContract,
     StakingPool,
+    StakingPoolsDelegator,
     Token,
     Token.Instance,
     TokenTransfer,
@@ -3015,6 +3017,7 @@ defmodule Explorer.Chain do
 
     query
     |> join_associations(necessity_by_association)
+    |> preload(:contract_address)
     |> Repo.one()
     |> case do
       nil ->
@@ -3179,7 +3182,7 @@ defmodule Explorer.Chain do
         end
       )
       |> Multi.run(:token, fn repo, _ ->
-        with {:error, %Changeset{errors: [{^stale_error_field, {^stale_error_message, []}}]}} <-
+        with {:error, %Changeset{errors: [{^stale_error_field, {^stale_error_message, [stale: true]}}]}} <-
                repo.insert(token_changeset, token_opts) do
           # the original token passed into `update_token/2` as stale error means it is unchanged
           {:ok, token}
@@ -3219,6 +3222,13 @@ defmodule Explorer.Chain do
       nil -> {:error, :not_found}
       token_instance -> {:ok, token_instance}
     end
+  end
+
+  @spec fetch_last_token_balance(Hash.Address.t(), Hash.Address.t()) :: Decimal.t()
+  def fetch_last_token_balance(address_hash, token_contract_address_hash) do
+    address_hash
+    |> CurrentTokenBalance.last_token_balance(token_contract_address_hash)
+    |> Repo.one() || Decimal.new(0)
   end
 
   @spec address_to_coin_balances(Hash.Address.t(), [paging_options]) :: []
@@ -3533,54 +3543,128 @@ defmodule Explorer.Chain do
   end
 
   @doc "Get staking pools from the DB"
-  @spec staking_pools(filter :: :validator | :active | :inactive, options :: PagingOptions.t()) :: [map()]
-  def staking_pools(filter, %PagingOptions{page_size: page_size, page_number: page_number} \\ @default_paging_options) do
-    off = page_size * (page_number - 1)
+  @spec staking_pools(
+          filter :: :validator | :active | :inactive,
+          paging_options :: PagingOptions.t() | :all,
+          delegator_address_hash :: Hash.t() | nil,
+          filter_banned :: boolean() | nil,
+          filter_my :: boolean() | nil
+        ) :: [map()]
+  def staking_pools(
+        filter,
+        paging_options \\ @default_paging_options,
+        delegator_address_hash \\ nil,
+        filter_banned \\ false,
+        filter_my \\ false
+      ) do
+    base_query =
+      StakingPool
+      |> where(is_deleted: false)
+      |> staking_pool_filter(filter)
+      |> staking_pools_paging_query(paging_options)
 
-    StakingPool
-    |> staking_pool_filter(filter)
-    |> limit(^page_size)
-    |> offset(^off)
-    |> Repo.all()
+    delegator_query =
+      if delegator_address_hash do
+        base_query
+        |> join(:left, [p], pd in StakingPoolsDelegator,
+          on:
+            p.staking_address_hash == pd.pool_address_hash and pd.delegator_address_hash == ^delegator_address_hash and
+              not pd.is_deleted
+        )
+        |> select([p, pd], %{pool: p, delegator: pd})
+      else
+        base_query
+        |> select([p], %{pool: p, delegator: nil})
+      end
+
+    banned_query =
+      if filter_banned do
+        where(delegator_query, is_banned: true)
+      else
+        delegator_query
+      end
+
+    filtered_query =
+      if delegator_address_hash && filter_my do
+        where(banned_query, [..., pd], not is_nil(pd))
+      else
+        banned_query
+      end
+
+    Repo.all(filtered_query)
+  end
+
+  defp staking_pools_paging_query(base_query, :all), do: base_query
+
+  defp staking_pools_paging_query(base_query, paging_options) do
+    paging_query =
+      base_query
+      |> limit(^paging_options.page_size)
+      |> order_by(desc: :staked_ratio, asc: :staking_address_hash)
+
+    case paging_options.key do
+      {value, address_hash} ->
+        where(
+          paging_query,
+          [p],
+          p.staked_ratio < ^value or
+            (p.staked_ratio == ^value and p.staking_address_hash > ^address_hash)
+        )
+
+      _ ->
+        paging_query
+    end
   end
 
   @doc "Get count of staking pools from the DB"
   @spec staking_pools_count(filter :: :validator | :active | :inactive) :: integer
   def staking_pools_count(filter) do
     StakingPool
+    |> where(is_deleted: false)
     |> staking_pool_filter(filter)
     |> Repo.aggregate(:count, :staking_address_hash)
   end
 
   defp staking_pool_filter(query, :validator) do
-    where(
-      query,
-      [pool],
-      pool.is_active == true and
-        pool.is_deleted == false and
-        pool.is_validator == true
-    )
+    where(query, is_validator: true)
   end
 
   defp staking_pool_filter(query, :active) do
-    where(
-      query,
-      [pool],
-      pool.is_active == true and
-        pool.is_deleted == false
-    )
+    where(query, is_active: true)
   end
 
   defp staking_pool_filter(query, :inactive) do
-    where(
-      query,
-      [pool],
-      pool.is_active == false and
-        pool.is_deleted == false
+    where(query, is_active: false)
+  end
+
+  def staking_pool(staking_address_hash) do
+    Repo.get_by(StakingPool, staking_address_hash: staking_address_hash)
+  end
+
+  def staking_pool_delegators(staking_address_hash) do
+    StakingPoolsDelegator
+    |> where(pool_address_hash: ^staking_address_hash, is_active: true)
+    |> order_by(desc: :stake_amount)
+    |> Repo.all()
+  end
+
+  def staking_pool_delegator(pool_address_hash, delegator_address_hash) do
+    Repo.get_by(StakingPoolsDelegator,
+      pool_address_hash: pool_address_hash,
+      delegator_address_hash: delegator_address_hash,
+      is_deleted: false
     )
   end
 
-  defp staking_pool_filter(query, _), do: query
+  def get_total_staked(address_hash) do
+    StakingPoolsDelegator
+    |> where([delegator], delegator.delegator_address_hash == ^address_hash and not delegator.is_deleted)
+    |> select([delegator], %{
+      stake_amount: coalesce(sum(delegator.stake_amount), 0),
+      ordered_withdraw: coalesce(sum(delegator.ordered_withdraw), 0)
+    })
+    |> Repo.one()
+  end
 
   defp with_decompiled_code_flag(query, _hash, false), do: query
 

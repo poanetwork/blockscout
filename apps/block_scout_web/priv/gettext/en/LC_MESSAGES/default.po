@@ -443,7 +443,7 @@ msgid "Copy Txn Hash"
 msgstr ""
 
 #, elixir-format
-#: lib/block_scout_web/templates/block/overview.html.eex:58
+#: lib/block_scout_web/templates/block/overview.html.eex:82
 msgid "Difficulty"
 msgstr ""
 
@@ -515,15 +515,15 @@ msgstr ""
 
 #, elixir-format
 #: lib/block_scout_web/templates/block/_tile.html.eex:57
-#: lib/block_scout_web/templates/block/overview.html.eex:108
-#: lib/block_scout_web/templates/block/overview.html.eex:161
+#: lib/block_scout_web/templates/block/overview.html.eex:132
+#: lib/block_scout_web/templates/block/overview.html.eex:185
 msgid "Gas Limit"
 msgstr ""
 
 #, elixir-format
 #: lib/block_scout_web/templates/block/_tile.html.eex:62
-#: lib/block_scout_web/templates/block/overview.html.eex:101
-#: lib/block_scout_web/templates/block/overview.html.eex:153
+#: lib/block_scout_web/templates/block/overview.html.eex:125
+#: lib/block_scout_web/templates/block/overview.html.eex:177
 msgid "Gas Used"
 msgstr ""
 
@@ -610,7 +610,7 @@ msgstr ""
 
 #, elixir-format
 #: lib/block_scout_web/templates/block/_tile.html.eex:38
-#: lib/block_scout_web/templates/block/overview.html.eex:124
+#: lib/block_scout_web/templates/block/overview.html.eex:148
 #: lib/block_scout_web/templates/chain/_block.html.eex:15
 msgid "Miner"
 msgstr ""
@@ -665,7 +665,7 @@ msgid "Execute"
 msgstr ""
 
 #, elixir-format
-#: lib/block_scout_web/templates/block/overview.html.eex:73
+#: lib/block_scout_web/templates/block/overview.html.eex:97
 #: lib/block_scout_web/templates/transaction/overview.html.eex:79
 msgid "Nonce"
 msgstr ""
@@ -722,7 +722,7 @@ msgid "GET"
 msgstr ""
 
 #, elixir-format
-#: lib/block_scout_web/templates/block/overview.html.eex:84
+#: lib/block_scout_web/templates/block/overview.html.eex:108
 msgid "Position %{index}"
 msgstr ""
 
@@ -910,7 +910,7 @@ msgid "Top Accounts - %{subnetwork} Explorer"
 msgstr ""
 
 #, elixir-format
-#: lib/block_scout_web/templates/block/overview.html.eex:67
+#: lib/block_scout_web/templates/block/overview.html.eex:91
 msgid "Total Difficulty"
 msgstr ""
 
@@ -1146,7 +1146,7 @@ msgid "Parameters"
 msgstr ""
 
 #, elixir-format
-#: lib/block_scout_web/templates/block/overview.html.eex:43
+#: lib/block_scout_web/templates/block/overview.html.eex:67
 msgid "Parent Hash"
 msgstr ""
 
@@ -1299,7 +1299,7 @@ msgid "Show Validator Info"
 msgstr ""
 
 #, elixir-format
-#: lib/block_scout_web/templates/block/overview.html.eex:146
+#: lib/block_scout_web/templates/block/overview.html.eex:170
 msgid "Block Rewards"
 msgstr ""
 
@@ -1521,7 +1521,7 @@ msgid "Uncle Reward"
 msgstr ""
 
 #, elixir-format
-#: lib/block_scout_web/templates/block/overview.html.eex:80
+#: lib/block_scout_web/templates/block/overview.html.eex:104
 #: lib/block_scout_web/templates/layout/_topnav.html.eex:38
 msgid "Uncles"
 msgstr ""
@@ -1869,4 +1869,19 @@ msgstr ""
 #: lib/block_scout_web/templates/layout/_topnav.html.eex:50
 #: lib/block_scout_web/views/address_view.ex:306
 msgid "Transactions"
+msgstr ""
+
+#, elixir-format
+#: lib/block_scout_web/templates/block/overview.html.eex:59
+msgid "Receipts root"
+msgstr ""
+
+#, elixir-format
+#: lib/block_scout_web/templates/block/overview.html.eex:43
+msgid "State root"
+msgstr ""
+
+#, elixir-format, fuzzy
+#: lib/block_scout_web/templates/block/overview.html.eex:51
+msgid "Transactions root"
 msgstr ""

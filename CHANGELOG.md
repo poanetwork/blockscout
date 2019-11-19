@@ -1,6 +1,7 @@
 ## Current
 
 ### Features
+- [#2842](https://github.com/poanetwork/blockscout/pull/2842) - save transactions_root, state_root, receipts_root to block
 - [#2825](https://github.com/poanetwork/blockscout/pull/2825) - separate token transfers and transactions
 - [#2787](https://github.com/poanetwork/blockscout/pull/2787) - async fetching of address counters
 - [#2791](https://github.com/poanetwork/blockscout/pull/2791) - add ipc client
